@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>EZTube Layout Planner</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  :root{--bg:#14161a;--panel:#1e2128;--panel2:#262a33;--txt:#e8eaf0;--mut:#9aa0ad;--acc:#7c5cff;--ok:#3ddc84;--warn:#ffb84d;--err:#ff6b6b;--bd:#343945}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font:13px/1.45 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:var(--bg);color:var(--txt);overflow:hidden}
+  #app{display:flex;height:100vh}
+
+  /* ---------- left sidebar ---------- */
+  #side{width:288px;min-width:288px;background:var(--panel);border-right:1px solid var(--bd);display:flex;flex-direction:column;overflow:hidden}
+  #side h1{font-size:15px;padding:12px 14px 4px}
+  #side h1 small{display:block;font-size:11px;color:var(--mut);font-weight:400}
+  .tabs{display:flex;gap:4px;padding:8px 10px 4px;flex-wrap:wrap}
+  .tabs button{flex:1 1 40%;padding:6px 4px;border:1px solid var(--bd);background:var(--panel2);color:var(--txt);border-radius:6px;cursor:pointer;font-size:12px}
+  .tabs button.on{background:var(--acc);border-color:var(--acc)}
+  #palSearchWrap{padding:6px 10px 0}
+  #palSearch{width:100%;background:#14161a;border:1px solid var(--bd);color:var(--txt);border-radius:6px;padding:5px 8px;font-size:12px}
+  #palette{flex:1;overflow-y:auto;padding:6px 10px 14px}
+  .pgroup{margin-top:10px}
+  .pgroup h3{font-size:11px;text-transform:uppercase;color:var(--mut);letter-spacing:.05em;margin-bottom:6px;cursor:pointer;user-select:none}
+  .pgroup h3::before{content:'▾ ';color:var(--mut)}
+  .pgroup.closed h3::before{content:'▸ '}
+  .pgroup.closed .pitem,.pgroup.closed .pbody{display:none}
+  .pitem{display:flex;align-items:center;gap:8px;padding:7px 9px;background:var(--panel2);border:1px solid var(--bd);border-radius:8px;margin-bottom:6px;cursor:pointer;transition:border-color .1s}
+  .pitem:hover{border-color:var(--acc)}
+  .pitem .ic{width:30px;height:30px;border-radius:6px;background:#30343f;display:flex;align-items:center;justify-content:center;font-size:15px;flex-shrink:0}
+  .pitem b{font-size:12px;font-weight:600;display:block}
+  .pitem span{font-size:11px;color:var(--mut)}
+  .pbody{font-size:12px;color:var(--mut)}
+  .pbody .brow{display:flex;gap:6px;align-items:center;margin-bottom:6px;flex-wrap:wrap}
+  .pbody button{background:var(--panel2);border:1px solid var(--bd);color:var(--txt);border-radius:6px;padding:4px 8px;cursor:pointer;font-size:11.5px}
+  .pbody button:hover{border-color:var(--acc)}
+  .pbody input[type=range]{width:110px}
+  .pbody textarea{width:100%;height:64px;background:#14161a;border:1px solid var(--bd);color:var(--txt);border-radius:6px;padding:5px;font-size:12px;resize:vertical}
+  #layersBox{border-top:1px solid var(--bd);padding:8px 10px;max-height:190px;overflow-y:auto}
+  #layersBox h3{font-size:11px;text-transform:uppercase;color:var(--mut);letter-spacing:.05em;margin-bottom:5px}
+  #layersBox label{display:flex;align-items:center;gap:6px;font-size:12px;padding:2px 0;color:var(--txt);cursor:pointer}
+
+  /* ---------- viewport & overlays ---------- */
+  #viewport{flex:1;position:relative}
+  canvas{display:block}
+  #topbar{position:absolute;top:8px;left:8px;right:8px;display:flex;gap:6px;align-items:center;pointer-events:none;flex-wrap:wrap}
+  #topbar>*{pointer-events:auto}
+  .bar{background:rgba(30,33,40,.92);border:1px solid var(--bd);border-radius:10px;padding:5px 8px;display:flex;gap:6px;align-items:center;backdrop-filter:blur(6px)}
+  .bar label{color:var(--mut);font-size:11.5px}
+  .bar input[type=number]{width:50px;background:#14161a;border:1px solid var(--bd);color:var(--txt);border-radius:5px;padding:3px 5px;font-size:12px}
+  .bar input[type=checkbox]{accent-color:var(--acc)}
+  .bar button,.bar select{background:var(--panel2);border:1px solid var(--bd);color:var(--txt);border-radius:6px;padding:4px 8px;cursor:pointer;font-size:12px}
+  .bar button:hover{border-color:var(--acc)}
+  .bar button.primary{background:var(--acc);border-color:var(--acc)}
+  .bar button.tog-on{background:#3a3360;border-color:var(--acc)}
+
+  /* ---------- properties panel ---------- */
+  #props{position:absolute;right:10px;top:86px;width:248px;max-height:calc(100% - 140px);overflow-y:auto;background:rgba(30,33,40,.95);border:1px solid var(--bd);border-radius:10px;padding:12px;display:none}
+  #props h3{font-size:13px;margin-bottom:8px}
+  #props h4{font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--mut);margin:10px 0 5px;border-bottom:1px solid #2a2e38;padding-bottom:3px}
+  #props .row{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;gap:6px}
+  #props .row label{color:var(--mut);font-size:12px;flex-shrink:0}
+  #props .row .val{font-size:12px}
+  #props input,#props select{width:100px;background:#14161a;border:1px solid var(--bd);color:var(--txt);border-radius:5px;padding:3px 6px;font-size:12px}
+  #props input[type=color]{padding:1px;height:24px}
+  #props textarea{width:100%;height:50px;background:#14161a;border:1px solid var(--bd);color:var(--txt);border-radius:5px;padding:4px 6px;font-size:12px;resize:vertical}
+  #props .actions{display:flex;gap:6px;margin-top:10px;flex-wrap:wrap}
+  #props .actions button{flex:1 1 45%;padding:5px;border-radius:6px;border:1px solid var(--bd);background:var(--panel2);color:var(--txt);cursor:pointer;font-size:12px}
+  #props .actions button.del{color:var(--err);border-color:#5c3030}
+  #props .alignGrid{display:grid;grid-template-columns:repeat(3,1fr);gap:5px;margin-bottom:6px}
+  #props .alignGrid button{padding:4px;border-radius:6px;border:1px solid var(--bd);background:var(--panel2);color:var(--txt);cursor:pointer;font-size:11px}
+
+  /* ---------- modals ---------- */
+  .modal{position:absolute;inset:36px;max-width:860px;margin:auto;background:var(--panel);border:1px solid var(--bd);border-radius:12px;padding:18px;display:none;flex-direction:column;z-index:20}
+  .modal h2{font-size:16px;margin-bottom:4px}
+  .modal .sub{color:var(--mut);font-size:12px;margin-bottom:10px}
+  .modal .mbody{overflow-y:auto;flex:1}
+  .modal table{width:100%;border-collapse:collapse;margin-bottom:16px;font-size:12px}
+  .modal th{text-align:left;color:var(--mut);font-weight:600;padding:5px 8px;border-bottom:1px solid var(--bd)}
+  .modal td{padding:5px 8px;border-bottom:1px solid #2a2e38}
+  .modal .bact{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
+  .modal .bact button{padding:7px 12px;border-radius:7px;border:1px solid var(--bd);background:var(--panel2);color:var(--txt);cursor:pointer;font-size:12px}
+  .modal .bact button.primary{background:var(--acc);border-color:var(--acc)}
+  .modal input[type=number]{width:70px;background:#14161a;border:1px solid var(--bd);color:var(--txt);border-radius:5px;padding:3px 5px;font-size:12px}
+  .modal .warnItem{padding:6px 9px;border-left:3px solid var(--warn);background:#262a33;border-radius:0 6px 6px 0;margin-bottom:6px;font-size:12px}
+  .modal .warnItem.err{border-left-color:var(--err)}
+  .modal .warnItem.info{border-left-color:var(--ok)}
+  .modal .setRow{display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-bottom:10px;font-size:12px;color:var(--mut)}
+  .modal .bomtabs{display:flex;gap:6px;margin-bottom:10px}
+  .modal .bomtabs button{padding:5px 12px;border-radius:6px;border:1px solid var(--bd);background:var(--panel2);color:var(--txt);cursor:pointer;font-size:12px}
+  .modal .bomtabs button.on{background:var(--acc);border-color:var(--acc)}
+  .modal td input.price{width:64px}
+  kbd{background:#30343f;border-radius:4px;padding:1px 5px;font-size:10.5px;font-family:inherit}
+  .shortcutGrid{display:grid;grid-template-columns:auto 1fr;gap:6px 14px;font-size:12.5px;align-items:center}
+
+  /* ---------- status bar ---------- */
+  #status{position:absolute;bottom:0;left:0;right:0;background:rgba(24,26,31,.95);border-top:1px solid var(--bd);padding:5px 12px;font-size:11.5px;color:var(--mut);display:flex;gap:18px;flex-wrap:wrap;pointer-events:none}
+  #status b{color:var(--txt);font-weight:600}
+
+  #loading{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:var(--bg);z-index:50;font-size:14px;color:var(--mut)}
+
+  /* ---------- presentation mode ---------- */
+  body.present #side,body.present #props,body.present #status,body.present .bar.hideable{display:none!important}
+  body.present #presentExit{display:flex!important}
+  #presentExit{display:none;position:absolute;top:8px;right:8px;z-index:30}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="side">
+    <h1>EZTube Layout Planner <small>3D layout & BOM tool</small></h1>
+    <div class="tabs">
+      <button id="tabStruct" class="on">Structures</button>
+      <button id="tabParts">Parts</button>
+      <button id="tabPlan">Space Plan</button>
+      <button id="tabSite">Floor Plan</button>
+    </div>
+    <div id="palSearchWrap"><input id="palSearch" type="search" placeholder="Search palette…"></div>
+    <div id="palette"></div>
+    <div id="layersBox"></div>
+  </div>
+
+  <div id="viewport">
+    <div id="loading">Loading EZTube part meshes…</div>
+
+    <div id="topbar">
+      <div class="bar hideable">
+        <label>Room</label>
+        <input type="number" id="roomW" value="40" min="5" step="1"> ×
+        <input type="number" id="roomD" value="60" min="5" step="1"> ft,
+        <label>ceiling</label><input type="number" id="roomH" value="12" min="6" step="0.5"> ft
+      </div>
+      <div class="bar hideable">
+        <button id="viewTop">Top</button>
+        <button id="view3d">3D</button>
+        <button id="viewFit">Fit Room</button>
+        <button id="viewFitSel">Fit Sel.</button>
+        <label><input type="checkbox" id="lockOrbit"> lock top-down</label>
+      </div>
+      <div class="bar hideable">
+        <label>Snap</label>
+        <select id="snapSize">
+          <option value="1">1″</option><option value="3" selected>3″</option>
+          <option value="6">6″</option><option value="12">12″</option>
+        </select>
+        <label><input type="checkbox" id="snapOn" checked> snap</label>
+        <label><input type="checkbox" id="gridOn" checked> grid</label>
+        <label><input type="checkbox" id="dimsOn" checked> dims</label>
+      </div>
+      <div class="bar hideable">
+        <button id="btnMeasure">Measure</button>
+        <button id="btnMeasureArea">Area</button>
+        <button id="btnWalls">Draw Walls</button>
+        <button id="btnChecks">Checks</button>
+        <button id="btnHelp">?</button>
+      </div>
+      <div class="bar hideable">
+        <button id="btnBom" class="primary">BOM</button>
+        <button id="btnSave">Save</button>
+        <button id="btnLoad">Load</button>
+        <button id="btnShotTop">PNG Top</button>
+        <button id="btnShot3d">PNG 3D</button>
+        <button id="btnPrint">Print</button>
+        <button id="btnPresent">Present</button>
+        <input type="file" id="fileLoad" accept=".json" style="display:none">
+        <input type="file" id="fileImg" accept="image/png,image/jpeg" style="display:none">
+      </div>
+    </div>
+
+    <div class="bar" id="presentExit"><button id="btnPresentExit">Exit presentation</button></div>
+
+    <div id="props"></div>
+
+    <!-- BOM modal -->
+    <div id="bom" class="modal">
+      <h2>Bill of Materials & Cut List</h2>
+      <div class="sub">Cut lengths assume tubes butt against connector bodies (HF/steel: −½″ per connector end, QR: −9/16″). Verify against EZTube spec sheets before cutting.</div>
+      <div class="bomtabs">
+        <button id="bomTabAll" class="on">Full BOM</button>
+        <button id="bomTabShop">Shopping List</button>
+        <button id="bomTabObj">Layout Objects</button>
+      </div>
+      <div id="bomtables" class="mbody"></div>
+      <div class="bact">
+        <button id="bomCsv" class="primary">Export CSV</button>
+        <button id="bomCutCsv">Cut List CSV</button>
+        <button id="bomJson">Export JSON</button>
+        <button id="bomPrintBtn">Printable</button>
+        <button id="bomClose">Close</button>
+      </div>
+    </div>
+
+    <!-- Planning checks modal -->
+    <div id="checks" class="modal">
+      <h2>Planning Checks</h2>
+      <div class="sub">Planning checks only — verify against local code and site measurements. These are geometry heuristics, not code-compliance guarantees.</div>
+      <div class="setRow">
+        <label>Min aisle <input type="number" id="setAisle" min="0" step="1"> in</label>
+        <label>VR buffer <input type="number" id="setBuffer" min="0" step="1"> in</label>
+        <label>Stock tube <input type="number" id="setStock" min="12" step="1"> in</label>
+        <label>Waste <input type="number" id="setWaste" min="0" max="50" step="1"> %</label>
+        <button id="runChecks" class="primary" style="padding:5px 12px;border-radius:6px;border:1px solid var(--acc);background:var(--acc);color:#fff;cursor:pointer">Re-run</button>
+      </div>
+      <div id="checksList" class="mbody"></div>
+      <div class="bact"><button id="checksClose">Close</button></div>
+    </div>
+
+    <!-- Help modal -->
+    <div id="help" class="modal" style="max-width:520px">
+      <h2>Keyboard Shortcuts & Tips</h2>
+      <div class="mbody">
+        <div class="shortcutGrid">
+          <span><kbd>R</kbd></span><span>Rotate selected 90°</span>
+          <span><kbd>D</kbd></span><span>Duplicate selected</span>
+          <span><kbd>Del</kbd></span><span>Delete selected</span>
+          <span><kbd>M</kbd></span><span>Measure distance</span>
+          <span><kbd>A</kbd></span><span>Measure area (two corners)</span>
+          <span><kbd>Esc</kbd></span><span>Exit mode / deselect</span>
+          <span><kbd>⌘/Ctrl Z</kbd></span><span>Undo</span>
+          <span><kbd>⌘/Ctrl ⇧ Z</kbd></span><span>Redo</span>
+          <span><kbd>⌘/Ctrl C</kbd> / <kbd>V</kbd></span><span>Copy / paste selection</span>
+          <span><kbd>←↑→↓</kbd></span><span>Nudge selected (snap step)</span>
+          <span><kbd>⇧ + arrows</kbd></span><span>Nudge 12″</span>
+          <span><kbd>G</kbd></span><span>Group / ungroup selection</span>
+          <span><kbd>L</kbd></span><span>Lock / unlock selected</span>
+          <span><kbd>⇧ + click</kbd></span><span>Add to selection</span>
+          <span><kbd>⇧ + drag</kbd></span><span>Disable snapping while dragging</span>
+        </div>
+        <p style="margin-top:12px;color:var(--mut);font-size:12px">
+          Click a palette item to add it at the room center. Drag items to move. Use the Floor Plan tab to outline the building shell,
+          import a reference floor-plan image, and calibrate its scale. Use Checks before ordering material.
+        </p>
+      </div>
+      <div class="bact"><button id="helpClose">Close</button></div>
+    </div>
+
+    <div id="status"></div>
+  </div>
+</div>
+<script src="https://unpkg.com/three@0.128.0/build/three.min.js"></script>
+<script src="https://unpkg.com/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+<script src="https://unpkg.com/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script src="eztube-parts.js"></script>
+<script src="planner-core.js"></script>
+<script src="planner-ui.js"></script>
+</body>
+</html>
