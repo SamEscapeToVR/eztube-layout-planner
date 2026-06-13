@@ -8,6 +8,7 @@ A browser-based 3D layout and planning tool for [EZTube](https://www.eztube.com/
 
 - **3D & top-down views** — orbit, pan, zoom or switch to a locked top-down view
 - **Parametric structures** — divider walls, banner/sign frames, and booth frames with adjustable dimensions, connector type, color, and bay count
+- **Stage truss** — Global Truss F-series box/triangular/single-tube truss in four configs (goal post, straight span, tower/totem, overhead grid) with automatic standard-segment BOM
 - **Single parts** — place individual connectors (L, T, X4, C3, T3D, W5, W6) and tube segments
 - **Space planning** — draw room walls, import a floor-plan image and calibrate its scale
 - **Snap & grid** — configurable snap (1″/3″/6″/12″) with live dimension overlays
@@ -26,6 +27,8 @@ A browser-based 3D layout and planning tool for [EZTube](https://www.eztube.com/
 | `HF` | Half-Fit / Press-Fit |
 | `QR` | Quick-Release |
 | `S`  | Steel series |
+
+Stage truss uses Global Truss F-series specs: **F34** (290 mm 4-chord box), **F44P** (290 mm heavy-duty box), **F33** (290 mm triangle), and **F31** (Ø50 mm single tube). Truss part labels in the BOM are descriptive (e.g. "F34 box truss — 1.0 m straight") — match them against the supplier catalog for exact SKUs.
 
 ## Getting started
 

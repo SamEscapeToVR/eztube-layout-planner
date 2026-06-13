@@ -21,7 +21,7 @@
 /* ---------- 1. palette data ---------- */
 const TYPE_NAMES={wall:'Divider / Frame',booth:'Booth Frame',tube:'Tube',part:'Connector',
                   rwall:'Building Wall',lrun:'L Divider',urun:'U Enclosure',frame:'Tube Frame',
-                  sign:'Hanging Sign',obj:'Object'};
+                  sign:'Hanging Sign',truss:'Stage Truss',obj:'Object'};
 function dispName(it){
   if(it.label) return it.label;
   if(it.type==='obj'){ const k=OBJ_KINDS[it.params.kind]; return (k?k.n:'Object')+' #'+it.id; }
@@ -44,6 +44,14 @@ const ASSEMBLIES = [
   {t:'frame', ic:'▢', n:'Custom Box Frame', d:'w × d × h, optional levels', params:{w:4,d:4,h:6,levels:0,shelves:false,sys:'QR',color:'BK',tubeColor:'SI'}},
   {t:'tube', ic:'▬', n:'Single Tube', d:'custom cut length', params:{len:48,orient:'horizontal',tubeColor:'SI'}},
   {t:'rwall', ic:'▮', n:'Building Wall', d:'solid wall — not EZTube', params:{len:10,h:10,thick:5,color:'WH'}},
+];
+
+// Global Truss F-series stage-truss presets (all type:'truss')
+const TRUSS_ASSEMBLIES = [
+  {t:'truss', ic:'╥', n:'Goal Post Truss',   d:'2 towers + top beam',     params:{config:'goalpost', series:'F34', color:'SI', w:12, d:8, h:10, elev:9}},
+  {t:'truss', ic:'━', n:'Straight Truss Span',d:'horizontal beam at height',params:{config:'span',     series:'F34', color:'SI', w:12, d:8, h:10, elev:9}},
+  {t:'truss', ic:'╪', n:'Truss Tower / Totem',d:'vertical column + base',  params:{config:'tower',    series:'F34', color:'SI', w:12, d:8, h:10, elev:9}},
+  {t:'truss', ic:'▦', n:'Overhead Truss Grid',d:'4 towers + perimeter',    params:{config:'grid',     series:'F34', color:'SI', w:16, d:12,h:10, elev:9}},
 ];
 
 const SHAPE_ORDER = ['cap','foot','L-HF','L-QR','I-HF','I-QR','T-HF','T-QR','C3-HF','C3-QR','X4-HF','X4-QR','T3D-HF','T3D-QR','W5-HF','W5-QR','L-S','T-S','C3-S','X4-S','T3D-S','W5-S','W6-S'];
@@ -112,6 +120,9 @@ const SEL_SYS={QR:'Quick-Release',HF:'Press-Fit (HF)'};
 const SEL_CCOL={BK:'Black',GY:'Gray',WH:'White'};
 const SEL_TCOL={SI:'Silver',BK:'Black',WH:'White'};
 const SEL_YN={true:'Yes',false:'No'};
+const SEL_TRUSSCFG={span:'Straight span',goalpost:'Goal post',tower:'Tower / totem',grid:'Overhead grid'};
+const SEL_TRUSSSER={F34:'F34 box (290mm)',F44P:'F44P box (HD)',F33:'F33 triangle',F31:'F31 single tube'};
+const SEL_TRUSSCOL={SI:'Silver',BK:'Black'};
 const FIELD_DEFS = {
   wall:[['w','Width (ft)','num',1,40],['h','Height (ft)','num',2,12],['bays','Bays','num',1,8],
         ['sys','Connectors','sel',SEL_SYS],
@@ -137,6 +148,9 @@ const FIELD_DEFS = {
         ['tubeColor','Tube finish','sel',SEL_TCOL],['panel','Panel infill','sel',SEL_YN]],
   tube:[['len','Length (in)','num',1,240],['orient','Orientation','sel',{horizontal:'Horizontal',vertical:'Vertical'}],
         ['tubeColor','Finish','sel',SEL_TCOL]],
+  truss:[['config','Configuration','sel',SEL_TRUSSCFG],['series','Truss series','sel',SEL_TRUSSSER],
+        ['w','Width (ft)','num',1,60],['d','Depth (ft)','num',1,60],['h','Height (ft)','num',2,20],
+        ['elev','Span height (ft)','num',2,20],['color','Finish','sel',SEL_TRUSSCOL]],
   part:[['color','Color','sel',SEL_CCOL]],
   rwall:[['len','Length (ft)','num',1,100],['h','Height (ft)','num',1,16],['thick','Thickness (in)','num',1,24],
         ['color','Finish','sel',{WH:'White / drywall',GY:'Gray',CN:'Concrete',BK:'Dark'}]],
@@ -186,6 +200,9 @@ function renderPalette(){
     const g1=pgroup('Parametric structures');
     ASSEMBLIES.forEach(a=>g1.appendChild(pitem(a.ic, a.n, a.d, ()=>addAtCenter(a.t, a.params))));
     palEl.appendChild(g1);
+    const gT=pgroup('Stage truss (Global Truss)');
+    TRUSS_ASSEMBLIES.forEach(a=>gT.appendChild(pitem(a.ic, a.n, a.d, ()=>addAtCenter(a.t, a.params))));
+    palEl.appendChild(gT);
     const g2=pgroup('Templates (multi-object)');
     TEMPLATES.forEach(t=>g2.appendChild(pitem('⊞', t.n, t.d, ()=>insertTemplate(t))));
     palEl.appendChild(g2);
@@ -1148,6 +1165,7 @@ function computeBom(){
   const cutCount={};      // 1/16" bucket -> qty
   const rwallCount={};    // desc -> qty
   const objCount={};      // kind label -> qty
+  const trussCount={};    // 'pn|name' -> qty
   const missingPN=new Set();
   const cutsArr=[];
   let totalTube=0, zoneArea=0;
@@ -1155,6 +1173,10 @@ function computeBom(){
     if(it.type==='rwall'){
       const key=`${it.params.len} ft × ${it.params.h} ft × ${it.params.thick}″`;
       rwallCount[key]=(rwallCount[key]||0)+1;
+      return;
+    }
+    if(it.type==='truss'){
+      (it._parts||[]).forEach(pt=>{ const key=pt.pn+'|'+pt.name; trussCount[key]=(trussCount[key]||0)+pt.qty; });
       return;
     }
     if(it.type==='obj'){
@@ -1190,7 +1212,7 @@ function computeBom(){
   });
   const stockNeeded=bins.length;
   const stockWithWaste=Math.ceil((totalTube*(1+settings.wastePct/100))/stockM);
-  return {connCount, cutCount, totalTube, rwallCount, objCount, zoneArea,
+  return {connCount, cutCount, totalTube, rwallCount, objCount, trussCount, zoneArea,
           missingPN:[...missingPN], stockNeeded, stockWithWaste, overlong};
 }
 
@@ -1228,6 +1250,11 @@ function renderBom(){
       <div class="sub">Total 1″×1″ tube: <b>${(b.totalTube/FT).toFixed(1)} ft</b> (${b.totalTube.toFixed(2)} m).
       Stock ${settings.stockIn}″ tubes — bin-packed: <b>${b.stockNeeded}</b>,
       with ${settings.wastePct}% waste allowance: <b>${Math.max(b.stockNeeded,b.stockWithWaste)}</b>.</div>`;
+    if(Object.keys(b.trussCount).length){
+      html+='<table><tr><th colspan="3">Stage truss — Global Truss F-series</th></tr><tr><th>Part</th><th>Description</th><th>Qty</th></tr>';
+      Object.keys(b.trussCount).sort().forEach(k=>{ const [pn,nm]=k.split('|'); html+=`<tr><td>${pn}</td><td>${nm}</td><td>${b.trussCount[k]}</td></tr>`; });
+      html+='</table><div class="sub">Standard Global Truss segment lengths; labels are descriptive — match against the supplier catalog for exact SKUs.</div>';
+    }
     if(Object.keys(b.rwallCount).length){
       html+='<table><tr><th>Building wall (non-EZTube)</th><th>Qty</th></tr>';
       Object.keys(b.rwallCount).sort().forEach(k=>{ html+=`<tr><td>${k}</td><td>${b.rwallCount[k]}</td></tr>`; });
@@ -1257,6 +1284,14 @@ function renderBom(){
     html+=`<tr><td>—</td><td>Stock tube ${settings.stockIn}″ (incl. ${settings.wastePct}% waste)</td><td>${tubeQty}</td>
       <td><input class="price" type="number" min="0" step="0.01" data-pn="STOCK_TUBE" value="${tubePr??''}"></td>
       <td>${tubeExt!==null?'$'+tubeExt.toFixed(2):'—'}</td></tr>`;
+    Object.keys(b.trussCount).sort().forEach(k=>{
+      const [pn,nm]=k.split('|'); const qty=b.trussCount[k];
+      const pr=prices[pn]; const ext=pr!==undefined?pr*qty:null;
+      if(ext!==null) total+=ext; else missing=true;
+      html+=`<tr><td>${pn}</td><td>${nm}</td><td>${qty}</td>
+        <td><input class="price" type="number" min="0" step="0.01" data-pn="${pn}" value="${pr??''}"></td>
+        <td>${ext!==null?'$'+ext.toFixed(2):'—'}</td></tr>`;
+    });
     html+=`</table><div class="sub">Estimated material cost: <b>$${total.toFixed(2)}</b>${missing?' (some prices missing)':''}</div>`;
     el.innerHTML=html;
     el.querySelectorAll('input.price').forEach(inp=>{
@@ -1308,6 +1343,7 @@ document.getElementById('bomCsv').onclick=()=>{
   });
   csv+=`tube_total,,total linear feet,,,${(b.totalTube/FT).toFixed(1)}\n`;
   csv+=`stock_tubes,,${settings.stockIn}in stock tubes incl waste,,,${Math.max(b.stockNeeded,b.stockWithWaste)}\n`;
+  Object.keys(b.trussCount).sort().forEach(k=>{ const [pn,nm]=k.split('|'); csv+=`truss,${pn},"${nm}",,,${b.trussCount[k]}\n`; });
   Object.keys(b.rwallCount).sort().forEach(k=>{ csv+=`building_wall,,"${k} solid wall (non-EZTube)",,,${b.rwallCount[k]}\n`; });
   download('eztube-bom.csv', csv, 'text/csv');
 };
@@ -1347,7 +1383,8 @@ function projectSummaryHTML(){
   const a=areasSummary();
   const b=computeBom();
   const vrCount=items.filter(it=>it.type==='obj'&&['vrArena','vrStation','arcadeZone'].includes(it.params.kind)).length;
-  const ezCount=items.filter(it=>!['obj','rwall'].includes(it.type)).length;
+  const ezCount=items.filter(it=>!['obj','rwall','truss'].includes(it.type)).length;
+  const trussCt=items.filter(it=>it.type==='truss').length;
   const connTotal=Object.values(b.connCount).reduce((x,y)=>x+y,0);
   return `<h2>Project summary</h2>
     <table border="0" cellpadding="4" style="border-collapse:collapse;font-size:13px">
@@ -1355,6 +1392,7 @@ function projectSummaryHTML(){
       <tr><td><b>VR zones / stations</b></td><td>${vrCount}</td></tr>
       <tr><td><b>EZTube structures</b></td><td>${ezCount}</td></tr>
       <tr><td><b>EZTube connectors</b></td><td>${connTotal}</td></tr>
+      ${trussCt?`<tr><td><b>Stage truss assemblies</b></td><td>${trussCt}</td></tr>`:''}
       <tr><td><b>Tube</b></td><td>${(b.totalTube/FT).toFixed(1)} linear ft · ${Math.max(b.stockNeeded,b.stockWithWaste)} stock ${settings.stockIn}″ tubes incl. ${settings.wastePct}% waste</td></tr>
       <tr><td><b>Open floor</b></td><td>≈ ${sqft(a.free).toFixed(0)} ft²</td></tr>
       ${projectNotes?`<tr><td valign="top"><b>Notes</b></td><td>${projectNotes.replace(/</g,'&lt;').replace(/\n/g,'<br>')}</td></tr>`:''}
@@ -1376,6 +1414,11 @@ function openPrintWindow(includeBom){
       bomHtml+=`<tr><td>${fmtIn(k/16*IN)}</td><td>${b.cutCount[k]}</td></tr>`;
     });
     bomHtml+='</table>';
+    if(Object.keys(b.trussCount).length){
+      bomHtml+='<h3>Stage truss (Global Truss F-series)</h3><table><tr><th>Part</th><th>Description</th><th>Qty</th></tr>';
+      Object.keys(b.trussCount).sort().forEach(k=>{ const [pn,nm]=k.split('|'); bomHtml+=`<tr><td>${pn}</td><td>${nm}</td><td>${b.trussCount[k]}</td></tr>`; });
+      bomHtml+='</table>';
+    }
     if(Object.keys(b.rwallCount).length||Object.keys(b.objCount).length){
       bomHtml+='<h3>Layout objects (non-EZTube)</h3><table><tr><th>Item</th><th>Qty</th></tr>';
       Object.keys(b.objCount).sort().forEach(k=>{ bomHtml+=`<tr><td>${k}</td><td>${b.objCount[k]}</td></tr>`; });

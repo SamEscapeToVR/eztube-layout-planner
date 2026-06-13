@@ -36,9 +36,9 @@ function sqft(m2){ return m2/(FT*FT); }
 /* ---------- 2. settings, layers, project state ---------- */
 const DEFAULT_SETTINGS = {snapIn:3, snapOn:true, gridOn:true, dimsOn:true,
                           minAisleIn:36, vrBufferIn:24, stockIn:96, wastePct:10};
-const DEFAULT_LAYERS = {ez:true, building:true, doors:true, zones:true,
+const DEFAULT_LAYERS = {ez:true, truss:true, building:true, doors:true, zones:true,
                         furniture:true, elec:true, labels:true, floorimg:true};
-const LAYER_NAMES = {ez:'EZTube structures', building:'Building walls / columns', doors:'Doors & windows',
+const LAYER_NAMES = {ez:'EZTube structures', truss:'Truss / rigging', building:'Building walls / columns', doors:'Doors & windows',
                      zones:'VR & operational zones', furniture:'Furniture / equipment',
                      elec:'Electrical / data / markers', labels:'Labels', floorimg:'Floor-plan image'};
 
@@ -478,6 +478,124 @@ function buildSign(p){
   return {group:g, conns, cuts};
 }
 
+/* ---------- 7b. stage truss (Global Truss F-series) ----------
+   A separate product family from EZTube: box/triangular/single-tube truss
+   in standard segment lengths. Builders return a `parts` array (truss BOM)
+   instead of EZTube conns/cuts. Specs below are the well-established
+   Global Truss F-series dimensions; part labels are descriptive (match to
+   the supplier catalog for exact SKUs). */
+const TRUSS_SERIES = {
+  F34: {n:'F34 box (290mm)',       chords:4, sec:0.29, chordD:0.050, braceD:0.016},
+  F44P:{n:'F44P box (290mm, HD)',  chords:4, sec:0.29, chordD:0.050, braceD:0.020},
+  F33: {n:'F33 triangle (290mm)',  chords:3, sec:0.29, chordD:0.050, braceD:0.016},
+  F31: {n:'F31 single tube (Ø50)', chords:1, sec:0.0,  chordD:0.050, braceD:0},
+};
+const TRUSS_COLORS = {SI:0xc9cdd4, BK:0x1c1c20};
+// standard Global Truss straight segment lengths (metres), longest first
+const TRUSS_LENS = [4, 3.5, 3, 2.5, 2, 1.5, 1, 0.75, 0.5, 0.25];
+
+// decompose a run length (m) into standard segments → {lengthM: qty}
+function trussSegments(lengthM){
+  const out={}; let rem=lengthM; const eps=0.02;
+  for(const L of TRUSS_LENS){ while(rem>=L-eps){ out[L]=(out[L]||0)+1; rem-=L; } }
+  if(rem>eps){ const L=TRUSS_LENS[TRUSS_LENS.length-1]; out[L]=(out[L]||0)+1; }
+  return out;
+}
+// perpendicular frame {r,u} for a beam direction
+function trussFrame(dir){
+  const ref = Math.abs(dir.y)>0.9 ? new THREE.Vector3(1,0,0) : new THREE.Vector3(0,1,0);
+  const r = new THREE.Vector3().crossVectors(ref, dir).normalize();
+  const u = new THREE.Vector3().crossVectors(dir, r).normalize();
+  return {r,u};
+}
+function cylBetween(a,b,radius,colorHex){
+  const dir=new THREE.Vector3().subVectors(b,a); const len=dir.length();
+  if(len<1e-4) return null;
+  const m=new THREE.Mesh(new THREE.CylinderGeometry(radius,radius,len,8),
+    new THREE.MeshStandardMaterial({color:colorHex, roughness:.4, metalness:.7}));
+  m.position.copy(a).addScaledVector(dir,0.5);
+  m.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0), dir.clone().normalize());
+  m.castShadow=true; return m;
+}
+// box/triangular/single truss beam between a and b → {mesh, len}
+function trussBeam(a,b,S,color){
+  const grp=new THREE.Group();
+  const colorHex=TRUSS_COLORS[color]??TRUSS_COLORS.SI;
+  const axis=new THREE.Vector3().subVectors(b,a); const len=axis.length();
+  if(len<1e-3) return {mesh:grp, len:0};
+  const dir=axis.clone().normalize();
+  const {r,u}=trussFrame(dir);
+  const s=S.sec;
+  let offs;
+  if(S.chords===4)      offs=[[ s/2, s/2],[-s/2, s/2],[-s/2,-s/2],[ s/2,-s/2]];
+  else if(S.chords===3) offs=[[0, s*0.55],[-s/2,-s*0.3],[s/2,-s*0.3]];
+  else                  offs=[[0,0]];
+  const pts=offs.map(([or,ou])=>({
+    a:a.clone().addScaledVector(r,or).addScaledVector(u,ou),
+    b:b.clone().addScaledVector(r,or).addScaledVector(u,ou)}));
+  pts.forEach(pc=>{ const c=cylBetween(pc.a,pc.b,S.chordD/2,colorHex); if(c) grp.add(c); });
+  // diagonal lacing per face (single diagonal per cell)
+  if(S.chords>1 && S.braceD>0){
+    const n=Math.min(12, Math.max(2, Math.round(len/Math.max(0.4, s))));
+    const faces = S.chords===4 ? [[0,1],[1,2],[2,3],[3,0]] : [[0,1],[1,2],[2,0]];
+    faces.forEach(([i,j])=>{
+      for(let k=0;k<n;k++){
+        const A=pts[i].a.clone().lerp(pts[i].b, k/n);
+        const B=pts[j].a.clone().lerp(pts[j].b, (k+1)/n);
+        const c=cylBetween(A,B,S.braceD/2,colorHex); if(c) grp.add(c);
+      }
+    });
+  }
+  return {mesh:grp, len};
+}
+function trussPlate(x,z){
+  const m=new THREE.Mesh(new THREE.BoxGeometry(0.6,0.04,0.6),
+    new THREE.MeshStandardMaterial({color:0x2a2d34, roughness:.7, metalness:.5}));
+  m.position.set(x,0.02,z); m.castShadow=true; m.receiveShadow=true; return m;
+}
+
+/* truss builder — config: span | tower | goalpost | grid.
+   p: {config, series, color SI|BK, w, d, h, elev (ft)} */
+function buildTruss(p){
+  const g=new THREE.Group(); const parts=[];
+  const S=TRUSS_SERIES[p.series]||TRUSS_SERIES.F34;
+  const col=p.color||'SI';
+  const colorHex=TRUSS_COLORS[col]??TRUSS_COLORS.SI;
+  const W=(p.w||12)*FT, D=(p.d||8)*FT, H=(p.h||10)*FT, EL=(p.elev||9)*FT;
+  const baseY=0.04;
+  const pushSeg=(len)=>{ const segs=trussSegments(len);
+    for(const L in segs) parts.push({pn:`${p.series}-S${L}`, name:`${S.n} — ${(+L).toFixed(2)} m straight`, qty:segs[L]}); };
+  const span=(a,b)=>{ const {mesh,len}=trussBeam(a,b,S,col); g.add(mesh); if(len>0) pushSeg(len); };
+  const plate=(x,z)=>{ g.add(trussPlate(x,z)); parts.push({pn:`${p.series}-BASE`, name:`${p.series} base plate`, qty:1}); };
+  const corner=(x,y,z)=>{ const sz=S.sec||0.1;
+    const m=new THREE.Mesh(new THREE.BoxGeometry(sz,sz,sz),
+      new THREE.MeshStandardMaterial({color:colorHex, roughness:.4, metalness:.7}));
+    m.position.set(x,y,z); m.castShadow=true; g.add(m);
+    parts.push({pn:`${p.series}-CNR`, name:`${p.series} corner block`, qty:1}); };
+
+  if(p.config==='span'){
+    span(new THREE.Vector3(-W/2,EL,0), new THREE.Vector3(W/2,EL,0));
+  } else if(p.config==='tower'){
+    span(new THREE.Vector3(0,baseY,0), new THREE.Vector3(0,H,0));
+    plate(0,0);
+  } else if(p.config==='goalpost'){
+    [-W/2, W/2].forEach(x=>{
+      span(new THREE.Vector3(x,baseY,0), new THREE.Vector3(x,H,0));
+      plate(x,0); corner(x,H,0);
+    });
+    span(new THREE.Vector3(-W/2,H,0), new THREE.Vector3(W/2,H,0));
+  } else { // grid
+    const corners=[[-W/2,-D/2],[W/2,-D/2],[W/2,D/2],[-W/2,D/2]];
+    corners.forEach(([x,z])=>{
+      span(new THREE.Vector3(x,baseY,z), new THREE.Vector3(x,H,z));
+      plate(x,z); corner(x,H,z);
+    });
+    for(let i=0;i<4;i++){ const [x1,z1]=corners[i],[x2,z2]=corners[(i+1)%4];
+      span(new THREE.Vector3(x1,H,z1), new THREE.Vector3(x2,H,z2)); }
+  }
+  return {group:g, conns:[], cuts:[], parts};
+}
+
 /* ---------- 8. building wall + space-plan object builders ---------- */
 const RWALL_COLORS = {WH:0xe8e4da, GY:0x8d9097, CN:0xb6b3ac, BK:0x3a3d44};
 function buildRwall(p){
@@ -574,7 +692,7 @@ function buildObj(p){
 
 const BUILDERS = {wall:buildWall, booth:buildBooth, tube:buildTube, part:buildPart,
                   rwall:buildRwall, lrun:buildLRun, urun:buildURun, frame:buildFrame,
-                  sign:buildSign, obj:buildObj};
+                  sign:buildSign, truss:buildTruss, obj:buildObj};
 
 /* ---------- 9. item lifecycle ---------- */
 let items = [];   // {id,type,x,z,rot,params, label?,notes?,locked?,hidden?,grp?}
@@ -585,6 +703,7 @@ const meshById = {};
 
 function layerOf(it){
   if(it.type==='rwall') return 'building';
+  if(it.type==='truss') return 'truss';
   if(it.type==='obj'){ const k=OBJ_KINDS[it.params.kind]; return k?k.layer:'zones'; }
   return 'ez';
 }
@@ -620,7 +739,7 @@ function rebuildItem(it){
   g.position.set(it.x, 0, it.z);
   g.rotation.y = it.rot;
   g.userData.itemId = it.id;
-  it._conns = built.conns; it._cuts = built.cuts;
+  it._conns = built.conns; it._cuts = built.cuts; it._parts = built.parts || [];
   // label sprite
   const text = it.label || (it.type==='obj' && isMarker(it) ? (OBJ_KINDS[it.params.kind]||{}).n : '');
   if(text){
@@ -815,7 +934,7 @@ function scaleFloorImg(factor){
 
 /* ---------- 13. serialization & undo ---------- */
 const SAVE_KEY='eztube-layout';
-function cleanItems(){ return items.map(({_conns,_cuts,_fp,...rest})=>rest); }
+function cleanItems(){ return items.map(({_conns,_cuts,_parts,_fp,...rest})=>rest); }
 function snapshot(){
   return {version:2, room, items:cleanItems(), nextId, measures, nextMeasureId,
           settings, layers, floorImg, notes:projectNotes, nextGrp};
