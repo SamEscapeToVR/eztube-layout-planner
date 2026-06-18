@@ -705,6 +705,7 @@ function snapToWall(it, nx, nz){
 
 renderer.domElement.addEventListener('pointerdown',e=>{
   if(e.button!==0) return;
+  if(walkMode){ lookDrag={x:e.clientX,y:e.clientY}; renderer.domElement.style.cursor='grabbing'; return; }
   if(mode==='measure'||mode==='measureArea'){ measureClick(e); return; }
   if(mode==='draw'){ drawClick(e); return; }
   if(mode==='calib'){ calibClick(e); return; }
@@ -742,6 +743,16 @@ renderer.domElement.addEventListener('pointerdown',e=>{
 });
 
 renderer.domElement.addEventListener('pointermove',e=>{
+  if(walkMode){
+    if(lookDrag){
+      const dx=e.clientX-lookDrag.x, dy=e.clientY-lookDrag.y;
+      lookDrag.x=e.clientX; lookDrag.y=e.clientY;
+      walkYaw -= dx*0.005;
+      walkPitch = Math.max(-1.2, Math.min(1.2, walkPitch - dy*0.005));
+      applyWalkCamera();
+    }
+    return;
+  }
   if(mode==='measure'||mode==='measureArea'){ measureMove(e); return; }
   if(mode==='draw'){ drawMove(e); return; }
   if(dragImgOff){
@@ -786,6 +797,7 @@ renderer.domElement.addEventListener('pointermove',e=>{
   }
 });
 addEventListener('pointerup',()=>{
+  if(walkMode){ lookDrag=null; renderer.domElement.style.cursor='grab'; return; }
   if(dragging||dragImgOff){
     dragging=null; dragImgOff=null; dragPendingUndo=null;
     controls.enabled=true; save(); renderProps();
@@ -927,6 +939,7 @@ btnWalls.onclick=()=>setMode(mode==='draw'?'normal':'draw');
 addEventListener('keydown',e=>{
   const tag=e.target.tagName;
   if(tag==='INPUT'||tag==='SELECT'||tag==='TEXTAREA') return;
+  if(walkMode){ if(e.key==='Escape') exitWalk(); return; }
   const meta=e.metaKey||e.ctrlKey;
 
   if(meta && (e.key==='z'||e.key==='Z')){ e.preventDefault(); e.shiftKey?redo():undo(); return; }
@@ -1027,6 +1040,72 @@ document.getElementById('lockOrbit').onchange=e=>{
   controls.enableRotate=!e.target.checked;
   if(e.target.checked) viewTopFn();
 };
+
+/* ---------- first-person walk mode ---------- */
+let walkMode=false;
+const walkKeys=new Set();
+let walkYaw=0, walkPitch=0, lookDrag=null;
+const walkClock=new THREE.Clock();
+const EYE=5.5*FT, WALK_SPEED=8*FT, WALK_RUN=16*FT;   // eye height + walk/run speed (m/s)
+const walkHint=document.createElement('div');
+walkHint.id='walkHint';
+walkHint.style.cssText='position:absolute;bottom:34px;left:50%;transform:translateX(-50%);background:rgba(30,33,40,.92);border:1px solid var(--bd);border-radius:8px;padding:7px 14px;font-size:12px;color:var(--mut);display:none;z-index:15;pointer-events:none;backdrop-filter:blur(6px)';
+walkHint.innerHTML='<b style="color:var(--txt)">Walk</b> &nbsp; <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> / arrows move &nbsp;·&nbsp; <kbd>Shift</kbd> run &nbsp;·&nbsp; drag to look &nbsp;·&nbsp; <kbd>Esc</kbd> exit';
+document.getElementById('viewport').appendChild(walkHint);
+
+function applyWalkCamera(){
+  const cp=Math.cos(walkPitch);
+  const dir=new THREE.Vector3(Math.sin(walkYaw)*cp, Math.sin(walkPitch), Math.cos(walkYaw)*cp);
+  camera.lookAt(camera.position.x+dir.x, camera.position.y+dir.y, camera.position.z+dir.z);
+}
+function walkUpdate(dt){
+  const f=new THREE.Vector3(Math.sin(walkYaw),0,Math.cos(walkYaw));   // horizontal forward
+  const r=new THREE.Vector3(-f.z,0,f.x);                              // right (strafe)
+  const mv=new THREE.Vector3();
+  if(walkKeys.has('w')||walkKeys.has('arrowup'))    mv.add(f);
+  if(walkKeys.has('s')||walkKeys.has('arrowdown'))  mv.sub(f);
+  if(walkKeys.has('d')||walkKeys.has('arrowright')) mv.add(r);
+  if(walkKeys.has('a')||walkKeys.has('arrowleft'))  mv.sub(r);
+  if(mv.lengthSq()>0){
+    mv.normalize();
+    const sp=(walkKeys.has('shift')?WALK_RUN:WALK_SPEED)*Math.min(dt,0.1);
+    const mx=Math.max(0.3, room.w*FT/2-0.3), mz=Math.max(0.3, room.d*FT/2-0.3);
+    camera.position.x=Math.max(-mx, Math.min(mx, camera.position.x+mv.x*sp));
+    camera.position.z=Math.max(-mz, Math.min(mz, camera.position.z+mv.z*sp));
+  }
+  camera.position.y=EYE;
+  applyWalkCamera();
+}
+function enterWalk(){
+  walkMode=true; walkKeys.clear(); lookDrag=null;
+  setSelection([]); selectMeasure(null);
+  controls.enabled=false;
+  const t=controls.target;
+  const mx=Math.max(0.3, room.w*FT/2-0.3), mz=Math.max(0.3, room.d*FT/2-0.3);
+  camera.position.set(Math.max(-mx,Math.min(mx,t.x||0)), EYE, Math.max(-mz,Math.min(mz,t.z||0)));
+  walkYaw=0; walkPitch=0; applyWalkCamera();
+  walkClock.getDelta();                       // reset dt
+  document.getElementById('btnWalk').classList.add('tog-on');
+  renderer.domElement.style.cursor='grab';
+  walkHint.style.display='block';
+}
+function exitWalk(){
+  walkMode=false; walkKeys.clear(); lookDrag=null;
+  controls.enabled=true;
+  document.getElementById('btnWalk').classList.remove('tog-on');
+  renderer.domElement.style.cursor='';
+  walkHint.style.display='none';
+  document.getElementById('view3d').onclick();   // restore orbit 3D view
+}
+function toggleWalk(){ walkMode?exitWalk():enterWalk(); }
+document.getElementById('btnWalk').onclick=toggleWalk;
+addEventListener('keydown',e=>{
+  if(!walkMode) return;
+  const tag=e.target.tagName; if(tag==='INPUT'||tag==='SELECT'||tag==='TEXTAREA') return;
+  const k=e.key.toLowerCase();
+  if(['w','a','s','d','arrowup','arrowdown','arrowleft','arrowright','shift'].includes(k)){ walkKeys.add(k); e.preventDefault(); }
+});
+addEventListener('keyup',e=>{ if(walkMode) walkKeys.delete(e.key.toLowerCase()); });
 document.getElementById('btnPresent').onclick=()=>{
   document.body.classList.add('present');
   setSelection([]); selectMeasure(null);
@@ -1566,4 +1645,4 @@ loadParts().then(()=>{
   document.getElementById('view3d').click();
   updateStatus();
 });
-(function animate(){ requestAnimationFrame(animate); controls.update(); renderer.render(scene,camera); })();
+(function animate(){ requestAnimationFrame(animate); if(walkMode) walkUpdate(walkClock.getDelta()); else controls.update(); renderer.render(scene,camera); })();
