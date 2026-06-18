@@ -36,9 +36,9 @@ function sqft(m2){ return m2/(FT*FT); }
 /* ---------- 2. settings, layers, project state ---------- */
 const DEFAULT_SETTINGS = {snapIn:3, snapOn:true, gridOn:true, dimsOn:true,
                           minAisleIn:36, vrBufferIn:24, stockIn:96, wastePct:10};
-const DEFAULT_LAYERS = {ez:true, truss:true, building:true, doors:true, zones:true,
+const DEFAULT_LAYERS = {ez:true, truss:true, paint:true, building:true, doors:true, zones:true,
                         furniture:true, elec:true, labels:true, floorimg:true};
-const LAYER_NAMES = {ez:'EZTube structures', truss:'Truss / rigging', building:'Building walls / columns', doors:'Doors & windows',
+const LAYER_NAMES = {ez:'EZTube structures', truss:'Truss / rigging', paint:'Wall paint / finishes', building:'Building walls / columns', doors:'Doors & windows',
                      zones:'VR & operational zones', furniture:'Furniture / equipment',
                      elec:'Electrical / data / markers', labels:'Labels', floorimg:'Floor-plan image'};
 
@@ -596,6 +596,35 @@ function buildTruss(p){
   return {group:g, conns:[], cuts:[], parts};
 }
 
+/* ---------- 7c. wall paint / finishes ----------
+   Free-standing vertical colour planes placed against a wall face.
+   mode 'area' = w×h colour panel; mode 'line' = a painted stripe/border.
+   Returns a `paint` metric {mode, area m², lineLen m} for the finishes BOM. */
+function buildPaint(p){
+  const g=new THREE.Group();
+  const col=new THREE.Color(p.color||'#d23b3b');
+  const opacity = (p.opacity!=null) ? Math.max(0.1, Math.min(1, +p.opacity)) : 1;
+  const EL=(p.elev||0)*FT;
+  let W, H, area=0, lineLen=0;
+  if(p.mode==='line'){
+    const L=(p.len||8)*FT, T=(p.thick||4)*IN;
+    if(p.orient==='vertical'){ W=T; H=L; } else { W=L; H=T; }
+    lineLen=L;
+  } else {
+    W=(p.w||6)*FT; H=(p.h||8)*FT; area=W*H;
+  }
+  const mat=new THREE.MeshStandardMaterial({color:col, roughness:.85, metalness:0,
+    side:THREE.DoubleSide, transparent:opacity<1, opacity});
+  const m=new THREE.Mesh(new THREE.PlaneGeometry(W,H), mat);
+  m.position.set(0, EL+H/2, 0); m.receiveShadow=true;
+  g.add(m);
+  // outline so thin/transparent paint stays visible & clickable
+  const edges=new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.PlaneGeometry(W,H)),
+    new THREE.LineBasicMaterial({color:col}));
+  edges.position.copy(m.position); g.add(edges);
+  return {group:g, conns:[], cuts:[], paint:{mode:p.mode||'area', area, lineLen}};
+}
+
 /* ---------- 8. building wall + space-plan object builders ---------- */
 const RWALL_COLORS = {WH:0xe8e4da, GY:0x8d9097, CN:0xb6b3ac, BK:0x3a3d44};
 function buildRwall(p){
@@ -692,7 +721,7 @@ function buildObj(p){
 
 const BUILDERS = {wall:buildWall, booth:buildBooth, tube:buildTube, part:buildPart,
                   rwall:buildRwall, lrun:buildLRun, urun:buildURun, frame:buildFrame,
-                  sign:buildSign, truss:buildTruss, obj:buildObj};
+                  sign:buildSign, truss:buildTruss, paint:buildPaint, obj:buildObj};
 
 /* ---------- 9. item lifecycle ---------- */
 let items = [];   // {id,type,x,z,rot,params, label?,notes?,locked?,hidden?,grp?}
@@ -704,6 +733,7 @@ const meshById = {};
 function layerOf(it){
   if(it.type==='rwall') return 'building';
   if(it.type==='truss') return 'truss';
+  if(it.type==='paint') return 'paint';
   if(it.type==='obj'){ const k=OBJ_KINDS[it.params.kind]; return k?k.layer:'zones'; }
   return 'ez';
 }
@@ -739,7 +769,7 @@ function rebuildItem(it){
   g.position.set(it.x, 0, it.z);
   g.rotation.y = it.rot;
   g.userData.itemId = it.id;
-  it._conns = built.conns; it._cuts = built.cuts; it._parts = built.parts || [];
+  it._conns = built.conns; it._cuts = built.cuts; it._parts = built.parts || []; it._paint = built.paint || null;
   // label sprite
   const text = it.label || (it.type==='obj' && isMarker(it) ? (OBJ_KINDS[it.params.kind]||{}).n : '');
   if(text){
@@ -934,7 +964,7 @@ function scaleFloorImg(factor){
 
 /* ---------- 13. serialization & undo ---------- */
 const SAVE_KEY='eztube-layout';
-function cleanItems(){ return items.map(({_conns,_cuts,_parts,_fp,...rest})=>rest); }
+function cleanItems(){ return items.map(({_conns,_cuts,_parts,_paint,_fp,...rest})=>rest); }
 function snapshot(){
   return {version:2, room, items:cleanItems(), nextId, measures, nextMeasureId,
           settings, layers, floorImg, notes:projectNotes, nextGrp};

@@ -9,6 +9,7 @@ A browser-based 3D layout and planning tool for [EZTube](https://www.eztube.com/
 - **3D & top-down views** — orbit, pan, zoom or switch to a locked top-down view
 - **Parametric structures** — divider walls, banner/sign frames, and booth frames with adjustable dimensions, connector type, color, and bay count
 - **Stage truss** — Global Truss F-series box/triangular/single-tube truss in four configs (goal post, straight span, tower/totem, overhead grid) with automatic standard-segment BOM
+- **Wall paint / finishes** — place resizable colored panels (area paint) and stripes (line paint) against any wall, with editable color, height, and opacity; painted area (ft²) and line length (ft) roll up into the BOM
 - **Single parts** — place individual connectors (L, T, X4, C3, T3D, W5, W6) and tube segments
 - **Space planning** — draw room walls, import a floor-plan image and calibrate its scale
 - **Snap & grid** — configurable snap (1″/3″/6″/12″) with live dimension overlays

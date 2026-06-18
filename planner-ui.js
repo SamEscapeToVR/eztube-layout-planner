@@ -21,7 +21,7 @@
 /* ---------- 1. palette data ---------- */
 const TYPE_NAMES={wall:'Divider / Frame',booth:'Booth Frame',tube:'Tube',part:'Connector',
                   rwall:'Building Wall',lrun:'L Divider',urun:'U Enclosure',frame:'Tube Frame',
-                  sign:'Hanging Sign',truss:'Stage Truss',obj:'Object'};
+                  sign:'Hanging Sign',truss:'Stage Truss',paint:'Wall Paint',obj:'Object'};
 function dispName(it){
   if(it.label) return it.label;
   if(it.type==='obj'){ const k=OBJ_KINDS[it.params.kind]; return (k?k.n:'Object')+' #'+it.id; }
@@ -52,6 +52,12 @@ const TRUSS_ASSEMBLIES = [
   {t:'truss', ic:'━', n:'Straight Truss Span',d:'horizontal beam at height',params:{config:'span',     series:'F34', color:'SI', w:12, d:8, h:10, elev:9}},
   {t:'truss', ic:'╪', n:'Truss Tower / Totem',d:'vertical column + base',  params:{config:'tower',    series:'F34', color:'SI', w:12, d:8, h:10, elev:9}},
   {t:'truss', ic:'▦', n:'Overhead Truss Grid',d:'4 towers + perimeter',    params:{config:'grid',     series:'F34', color:'SI', w:16, d:12,h:10, elev:9}},
+];
+
+// wall paint / finishes presets (all type:'paint')
+const PAINT_ASSEMBLIES = [
+  {t:'paint', ic:'▰', n:'Area Paint',  d:'colored wall panel',      params:{mode:'area', w:6, h:8, elev:0, color:'#d23b3b', opacity:1}},
+  {t:'paint', ic:'─', n:'Line Paint',  d:'painted stripe / border', params:{mode:'line', len:8, thick:4, orient:'horizontal', elev:4, color:'#ffffff', opacity:1}},
 ];
 
 const SHAPE_ORDER = ['cap','foot','L-HF','L-QR','I-HF','I-QR','T-HF','T-QR','C3-HF','C3-QR','X4-HF','X4-QR','T3D-HF','T3D-QR','W5-HF','W5-QR','L-S','T-S','C3-S','X4-S','T3D-S','W5-S','W6-S'];
@@ -156,6 +162,17 @@ const FIELD_DEFS = {
         ['color','Finish','sel',{WH:'White / drywall',GY:'Gray',CN:'Concrete',BK:'Dark'}]],
 };
 function fieldDefsFor(it){
+  if(it.type==='paint'){
+    const defs=[];
+    if(it.params.mode==='line'){
+      defs.push(['len','Length (ft)','num',0.5,80],['thick','Thickness (in)','num',0.25,36],
+                ['orient','Orientation','sel',{horizontal:'Horizontal',vertical:'Vertical'}]);
+    } else {
+      defs.push(['w','Width (ft)','num',0.5,40],['h','Height (ft)','num',0.5,16]);
+    }
+    defs.push(['elev','Bottom height (ft)','num',0,16],['opacity','Opacity','num',0.1,1],['color','Color','color']);
+    return defs;
+  }
   if(it.type!=='obj') return FIELD_DEFS[it.type]||[];
   const k=OBJ_KINDS[it.params.kind]||{};
   const defs=[];
@@ -203,6 +220,9 @@ function renderPalette(){
     const gT=pgroup('Stage truss (Global Truss)');
     TRUSS_ASSEMBLIES.forEach(a=>gT.appendChild(pitem(a.ic, a.n, a.d, ()=>addAtCenter(a.t, a.params))));
     palEl.appendChild(gT);
+    const gP=pgroup('Wall paint / finishes');
+    PAINT_ASSEMBLIES.forEach(a=>gP.appendChild(pitem(a.ic, a.n, a.d, ()=>addAtCenter(a.t, a.params))));
+    palEl.appendChild(gP);
     const g2=pgroup('Templates (multi-object)');
     TEMPLATES.forEach(t=>g2.appendChild(pitem('⊞', t.n, t.d, ()=>insertTemplate(t))));
     palEl.appendChild(g2);
@@ -1166,9 +1186,10 @@ function computeBom(){
   const rwallCount={};    // desc -> qty
   const objCount={};      // kind label -> qty
   const trussCount={};    // 'pn|name' -> qty
+  const paintByColor={};  // '#RRGGBB' -> {area m², line m}
   const missingPN=new Set();
   const cutsArr=[];
-  let totalTube=0, zoneArea=0;
+  let totalTube=0, zoneArea=0, paintArea=0, paintLine=0;
   items.forEach(it=>{
     if(it.type==='rwall'){
       const key=`${it.params.len} ft × ${it.params.h} ft × ${it.params.thick}″`;
@@ -1177,6 +1198,13 @@ function computeBom(){
     }
     if(it.type==='truss'){
       (it._parts||[]).forEach(pt=>{ const key=pt.pn+'|'+pt.name; trussCount[key]=(trussCount[key]||0)+pt.qty; });
+      return;
+    }
+    if(it.type==='paint'){
+      const pa=it._paint||{}; const c=(it.params.color||'#d23b3b').toUpperCase();
+      const e=paintByColor[c]||(paintByColor[c]={area:0, line:0});
+      e.area+=pa.area||0; e.line+=pa.lineLen||0;
+      paintArea+=pa.area||0; paintLine+=pa.lineLen||0;
       return;
     }
     if(it.type==='obj'){
@@ -1213,6 +1241,7 @@ function computeBom(){
   const stockNeeded=bins.length;
   const stockWithWaste=Math.ceil((totalTube*(1+settings.wastePct/100))/stockM);
   return {connCount, cutCount, totalTube, rwallCount, objCount, trussCount, zoneArea,
+          paintByColor, paintArea, paintLine,
           missingPN:[...missingPN], stockNeeded, stockWithWaste, overlong};
 }
 
@@ -1255,6 +1284,14 @@ function renderBom(){
       Object.keys(b.trussCount).sort().forEach(k=>{ const [pn,nm]=k.split('|'); html+=`<tr><td>${pn}</td><td>${nm}</td><td>${b.trussCount[k]}</td></tr>`; });
       html+='</table><div class="sub">Standard Global Truss segment lengths; labels are descriptive — match against the supplier catalog for exact SKUs.</div>';
     }
+    if(Object.keys(b.paintByColor).length){
+      html+='<table><tr><th colspan="3">Finishes / paint</th></tr><tr><th>Color</th><th>Area (ft²)</th><th>Line (ft)</th></tr>';
+      Object.keys(b.paintByColor).sort().forEach(c=>{ const e=b.paintByColor[c];
+        html+=`<tr><td><span style="display:inline-block;width:11px;height:11px;border:1px solid #555;background:${c};vertical-align:middle;margin-right:5px"></span>${c}</td>`+
+              `<td>${e.area?sqft(e.area).toFixed(1):'—'}</td><td>${e.line?(e.line/FT).toFixed(1):'—'}</td></tr>`;
+      });
+      html+=`</table><div class="sub">Total painted area: <b>${sqft(b.paintArea).toFixed(1)} ft²</b> · line paint: <b>${(b.paintLine/FT).toFixed(1)} ft</b>. Visual finishes — confirm coverage and coats against paint specs.</div>`;
+    }
     if(Object.keys(b.rwallCount).length){
       html+='<table><tr><th>Building wall (non-EZTube)</th><th>Qty</th></tr>';
       Object.keys(b.rwallCount).sort().forEach(k=>{ html+=`<tr><td>${k}</td><td>${b.rwallCount[k]}</td></tr>`; });
@@ -1289,6 +1326,16 @@ function renderBom(){
       const pr=prices[pn]; const ext=pr!==undefined?pr*qty:null;
       if(ext!==null) total+=ext; else missing=true;
       html+=`<tr><td>${pn}</td><td>${nm}</td><td>${qty}</td>
+        <td><input class="price" type="number" min="0" step="0.01" data-pn="${pn}" value="${pr??''}"></td>
+        <td>${ext!==null?'$'+ext.toFixed(2):'—'}</td></tr>`;
+    });
+    const paintRows=[];
+    if(b.paintArea>0) paintRows.push(['PAINT_AREA', 'Wall paint area ($/ft²)', sqft(b.paintArea), 'ft²']);
+    if(b.paintLine>0) paintRows.push(['PAINT_LINE', 'Line paint ($/ft)', b.paintLine/FT, 'ft']);
+    paintRows.forEach(([pn,nm,qty])=>{
+      const q=+qty.toFixed(1); const pr=prices[pn]; const ext=pr!==undefined?pr*q:null;
+      if(ext!==null) total+=ext; else missing=true;
+      html+=`<tr><td>${pn}</td><td>${nm}</td><td>${q}</td>
         <td><input class="price" type="number" min="0" step="0.01" data-pn="${pn}" value="${pr??''}"></td>
         <td>${ext!==null?'$'+ext.toFixed(2):'—'}</td></tr>`;
     });
@@ -1344,6 +1391,9 @@ document.getElementById('bomCsv').onclick=()=>{
   csv+=`tube_total,,total linear feet,,,${(b.totalTube/FT).toFixed(1)}\n`;
   csv+=`stock_tubes,,${settings.stockIn}in stock tubes incl waste,,,${Math.max(b.stockNeeded,b.stockWithWaste)}\n`;
   Object.keys(b.trussCount).sort().forEach(k=>{ const [pn,nm]=k.split('|'); csv+=`truss,${pn},"${nm}",,,${b.trussCount[k]}\n`; });
+  Object.keys(b.paintByColor).sort().forEach(c=>{ const e=b.paintByColor[c];
+    if(e.area>0) csv+=`paint_area,,"Wall paint ${c}",${c},,${sqft(e.area).toFixed(1)} ft2\n`;
+    if(e.line>0) csv+=`paint_line,,"Line paint ${c}",${c},,${(e.line/FT).toFixed(1)} ft\n`; });
   Object.keys(b.rwallCount).sort().forEach(k=>{ csv+=`building_wall,,"${k} solid wall (non-EZTube)",,,${b.rwallCount[k]}\n`; });
   download('eztube-bom.csv', csv, 'text/csv');
 };
@@ -1383,7 +1433,7 @@ function projectSummaryHTML(){
   const a=areasSummary();
   const b=computeBom();
   const vrCount=items.filter(it=>it.type==='obj'&&['vrArena','vrStation','arcadeZone'].includes(it.params.kind)).length;
-  const ezCount=items.filter(it=>!['obj','rwall','truss'].includes(it.type)).length;
+  const ezCount=items.filter(it=>!['obj','rwall','truss','paint'].includes(it.type)).length;
   const trussCt=items.filter(it=>it.type==='truss').length;
   const connTotal=Object.values(b.connCount).reduce((x,y)=>x+y,0);
   return `<h2>Project summary</h2>
@@ -1393,6 +1443,7 @@ function projectSummaryHTML(){
       <tr><td><b>EZTube structures</b></td><td>${ezCount}</td></tr>
       <tr><td><b>EZTube connectors</b></td><td>${connTotal}</td></tr>
       ${trussCt?`<tr><td><b>Stage truss assemblies</b></td><td>${trussCt}</td></tr>`:''}
+      ${b.paintArea||b.paintLine?`<tr><td><b>Wall paint / finishes</b></td><td>${sqft(b.paintArea).toFixed(0)} ft² area · ${(b.paintLine/FT).toFixed(0)} ft line</td></tr>`:''}
       <tr><td><b>Tube</b></td><td>${(b.totalTube/FT).toFixed(1)} linear ft · ${Math.max(b.stockNeeded,b.stockWithWaste)} stock ${settings.stockIn}″ tubes incl. ${settings.wastePct}% waste</td></tr>
       <tr><td><b>Open floor</b></td><td>≈ ${sqft(a.free).toFixed(0)} ft²</td></tr>
       ${projectNotes?`<tr><td valign="top"><b>Notes</b></td><td>${projectNotes.replace(/</g,'&lt;').replace(/\n/g,'<br>')}</td></tr>`:''}
@@ -1417,6 +1468,12 @@ function openPrintWindow(includeBom){
     if(Object.keys(b.trussCount).length){
       bomHtml+='<h3>Stage truss (Global Truss F-series)</h3><table><tr><th>Part</th><th>Description</th><th>Qty</th></tr>';
       Object.keys(b.trussCount).sort().forEach(k=>{ const [pn,nm]=k.split('|'); bomHtml+=`<tr><td>${pn}</td><td>${nm}</td><td>${b.trussCount[k]}</td></tr>`; });
+      bomHtml+='</table>';
+    }
+    if(Object.keys(b.paintByColor).length){
+      bomHtml+='<h3>Finishes / paint</h3><table><tr><th>Color</th><th>Area (ft²)</th><th>Line (ft)</th></tr>';
+      Object.keys(b.paintByColor).sort().forEach(c=>{ const e=b.paintByColor[c];
+        bomHtml+=`<tr><td>${c}</td><td>${e.area?sqft(e.area).toFixed(1):'—'}</td><td>${e.line?(e.line/FT).toFixed(1):'—'}</td></tr>`; });
       bomHtml+='</table>';
     }
     if(Object.keys(b.rwallCount).length||Object.keys(b.objCount).length){
