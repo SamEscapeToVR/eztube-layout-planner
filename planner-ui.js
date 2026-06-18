@@ -21,7 +21,8 @@
 /* ---------- 1. palette data ---------- */
 const TYPE_NAMES={wall:'Divider / Frame',booth:'Booth Frame',tube:'Tube',part:'Connector',
                   rwall:'Building Wall',lrun:'L Divider',urun:'U Enclosure',frame:'Tube Frame',
-                  sign:'Hanging Sign',truss:'Stage Truss',paint:'Wall Paint',obj:'Object'};
+                  sign:'Hanging Sign',truss:'Stage Truss',paint:'Wall Paint',
+                  spot:'Spotlight',banner:'Banner',obj:'Object'};
 function dispName(it){
   if(it.label) return it.label;
   if(it.type==='obj'){ const k=OBJ_KINDS[it.params.kind]; return (k?k.n:'Object')+' #'+it.id; }
@@ -162,6 +163,17 @@ const FIELD_DEFS = {
         ['color','Finish','sel',{WH:'White / drywall',GY:'Gray',CN:'Concrete',BK:'Dark'}]],
 };
 function fieldDefsFor(it){
+  if(it.type==='spot'){
+    return [['color','Color','color'],['intensity','Brightness','num',0.5,10],
+            ['beam','Beam angle (°)','num',5,80],['reach','Reach (ft)','num',3,40],
+            ['elev','Mount height (ft)','num',1,20],['tilt','Tilt (°)','num',0,89],
+            ['beamOn','Show beam','sel',SEL_YN],['shadow','Cast shadow','sel',SEL_YN]];
+  }
+  if(it.type==='banner'){
+    return [['w','Width (ft)','num',0.5,40],['mount','Mount','sel',{standing:'Standing',hanging:'Hanging'}],
+            ['elev','Bottom height (ft)','num',0,16],['double','Double-sided','sel',SEL_YN],
+            ['opacity','Opacity','num',0.1,1]];
+  }
   if(it.type==='paint'){
     const defs=[];
     if(it.params.mode==='line'){
@@ -223,6 +235,11 @@ function renderPalette(){
     const gP=pgroup('Wall paint / finishes');
     PAINT_ASSEMBLIES.forEach(a=>gP.appendChild(pitem(a.ic, a.n, a.d, ()=>addAtCenter(a.t, a.params))));
     palEl.appendChild(gP);
+    const gL=pgroup('Lighting & signage');
+    gL.appendChild(pitem('✸','RGB Spotlight','colored beam fixture', ()=>addAtCenter('spot',
+      {color:'#ff2d6b', intensity:4, beam:22, reach:16, elev:11, tilt:0, beamOn:true, shadow:false})));
+    gL.appendChild(pitem('▥','Banner (image)','upload an image', ()=>document.getElementById('fileBanner').click()));
+    palEl.appendChild(gL);
     const g2=pgroup('Templates (multi-object)');
     TEMPLATES.forEach(t=>g2.appendChild(pitem('⊞', t.n, t.d, ()=>insertTemplate(t))));
     palEl.appendChild(g2);
@@ -1106,6 +1123,36 @@ addEventListener('keydown',e=>{
   if(['w','a','s','d','arrowup','arrowdown','arrowleft','arrowright','shift'].includes(k)){ walkKeys.add(k); e.preventDefault(); }
 });
 addEventListener('keyup',e=>{ if(walkMode) walkKeys.delete(e.key.toLowerCase()); });
+
+/* ---------- show-lighting (blackout) toggle ---------- */
+document.getElementById('btnShowLight').onclick=()=>{
+  setShowLighting(!showLighting);
+  document.getElementById('btnShowLight').classList.toggle('tog-on', showLighting);
+};
+
+/* ---------- banner image upload (downscaled to protect save size) ---------- */
+function importBannerImage(file){
+  const fr=new FileReader();
+  fr.onload=()=>{
+    const im=new Image();
+    im.onload=()=>{
+      const max=1024, scale=Math.min(1, max/Math.max(im.naturalWidth, im.naturalHeight));
+      const cw=Math.max(1,Math.round(im.naturalWidth*scale)), ch=Math.max(1,Math.round(im.naturalHeight*scale));
+      const cv=document.createElement('canvas'); cv.width=cw; cv.height=ch;
+      cv.getContext('2d').drawImage(im,0,0,cw,ch);
+      const dataURL=cv.toDataURL('image/jpeg',0.85);
+      addAtCenter('banner', {img:dataURL, w:6, aspect:im.naturalHeight/im.naturalWidth,
+                             elev:0, mount:'standing', double:true, opacity:1});
+    };
+    im.onerror=()=>alert('Could not read that image.');
+    im.src=fr.result;
+  };
+  fr.readAsDataURL(file);
+}
+document.getElementById('fileBanner').addEventListener('change',e=>{
+  const f=e.target.files[0]; if(f) importBannerImage(f);
+  e.target.value='';
+});
 document.getElementById('btnPresent').onclick=()=>{
   document.body.classList.add('present');
   setSelection([]); selectMeasure(null);
@@ -1266,9 +1313,10 @@ function computeBom(){
   const objCount={};      // kind label -> qty
   const trussCount={};    // 'pn|name' -> qty
   const paintByColor={};  // '#RRGGBB' -> {area m², line m}
+  const spotByColor={};   // '#RRGGBB' -> qty (lighting fixtures)
   const missingPN=new Set();
   const cutsArr=[];
-  let totalTube=0, zoneArea=0, paintArea=0, paintLine=0;
+  let totalTube=0, zoneArea=0, paintArea=0, paintLine=0, spotCount=0, bannerCount=0, bannerArea=0;
   items.forEach(it=>{
     if(it.type==='rwall'){
       const key=`${it.params.len} ft × ${it.params.h} ft × ${it.params.thick}″`;
@@ -1284,6 +1332,16 @@ function computeBom(){
       const e=paintByColor[c]||(paintByColor[c]={area:0, line:0});
       e.area+=pa.area||0; e.line+=pa.lineLen||0;
       paintArea+=pa.area||0; paintLine+=pa.lineLen||0;
+      return;
+    }
+    if(it.type==='spot'){
+      const c=(it.params.color||'#ffffff').toUpperCase();
+      spotByColor[c]=(spotByColor[c]||0)+1; spotCount++;
+      return;
+    }
+    if(it.type==='banner'){
+      const W=(it.params.w||6)*FT, H=W*(it.params.aspect||0.5);
+      bannerArea+=W*H; bannerCount++;
       return;
     }
     if(it.type==='obj'){
@@ -1321,6 +1379,7 @@ function computeBom(){
   const stockWithWaste=Math.ceil((totalTube*(1+settings.wastePct/100))/stockM);
   return {connCount, cutCount, totalTube, rwallCount, objCount, trussCount, zoneArea,
           paintByColor, paintArea, paintLine,
+          spotByColor, spotCount, bannerCount, bannerArea,
           missingPN:[...missingPN], stockNeeded, stockWithWaste, overlong};
 }
 
@@ -1371,6 +1430,17 @@ function renderBom(){
       });
       html+=`</table><div class="sub">Total painted area: <b>${sqft(b.paintArea).toFixed(1)} ft²</b> · line paint: <b>${(b.paintLine/FT).toFixed(1)} ft</b>. Visual finishes — confirm coverage and coats against paint specs.</div>`;
     }
+    if(b.spotCount){
+      html+='<table><tr><th colspan="2">Lighting &amp; AV — spotlights</th></tr><tr><th>Color</th><th>Qty</th></tr>';
+      Object.keys(b.spotByColor).sort().forEach(c=>{
+        html+=`<tr><td><span style="display:inline-block;width:11px;height:11px;border:1px solid #555;background:${c};vertical-align:middle;margin-right:5px"></span>${c}</td><td>${b.spotByColor[c]}</td></tr>`;
+      });
+      html+=`</table><div class="sub">Total fixtures: <b>${b.spotCount}</b>${b.spotCount>8?' — <span style="color:var(--warn)">over the recommended 8 real-time lights; performance may drop on weaker machines.</span>':'.'}</div>`;
+    }
+    if(b.bannerCount){
+      html+=`<table><tr><th>Signage / banners</th><th>Qty</th><th>Print area (ft²)</th></tr>
+        <tr><td>Image banners</td><td>${b.bannerCount}</td><td>${sqft(b.bannerArea).toFixed(1)}</td></tr></table>`;
+    }
     if(Object.keys(b.rwallCount).length){
       html+='<table><tr><th>Building wall (non-EZTube)</th><th>Qty</th></tr>';
       Object.keys(b.rwallCount).sort().forEach(k=>{ html+=`<tr><td>${k}</td><td>${b.rwallCount[k]}</td></tr>`; });
@@ -1411,6 +1481,8 @@ function renderBom(){
     const paintRows=[];
     if(b.paintArea>0) paintRows.push(['PAINT_AREA', 'Wall paint area ($/ft²)', sqft(b.paintArea), 'ft²']);
     if(b.paintLine>0) paintRows.push(['PAINT_LINE', 'Line paint ($/ft)', b.paintLine/FT, 'ft']);
+    if(b.spotCount>0) paintRows.push(['SPOT_FIXTURE', 'RGB spotlight fixture ($/ea)', b.spotCount, 'ea']);
+    if(b.bannerArea>0) paintRows.push(['BANNER_PRINT', 'Banner print ($/ft²)', sqft(b.bannerArea), 'ft²']);
     paintRows.forEach(([pn,nm,qty])=>{
       const q=+qty.toFixed(1); const pr=prices[pn]; const ext=pr!==undefined?pr*q:null;
       if(ext!==null) total+=ext; else missing=true;
@@ -1473,6 +1545,8 @@ document.getElementById('bomCsv').onclick=()=>{
   Object.keys(b.paintByColor).sort().forEach(c=>{ const e=b.paintByColor[c];
     if(e.area>0) csv+=`paint_area,,"Wall paint ${c}",${c},,${sqft(e.area).toFixed(1)} ft2\n`;
     if(e.line>0) csv+=`paint_line,,"Line paint ${c}",${c},,${(e.line/FT).toFixed(1)} ft\n`; });
+  Object.keys(b.spotByColor).sort().forEach(c=>{ csv+=`spotlight,,"RGB spotlight ${c}",${c},,${b.spotByColor[c]}\n`; });
+  if(b.bannerCount) csv+=`banner,,"Image banners (${sqft(b.bannerArea).toFixed(1)} ft2 print)",,,${b.bannerCount}\n`;
   Object.keys(b.rwallCount).sort().forEach(k=>{ csv+=`building_wall,,"${k} solid wall (non-EZTube)",,,${b.rwallCount[k]}\n`; });
   download('eztube-bom.csv', csv, 'text/csv');
 };
@@ -1512,7 +1586,7 @@ function projectSummaryHTML(){
   const a=areasSummary();
   const b=computeBom();
   const vrCount=items.filter(it=>it.type==='obj'&&['vrArena','vrStation','arcadeZone'].includes(it.params.kind)).length;
-  const ezCount=items.filter(it=>!['obj','rwall','truss','paint'].includes(it.type)).length;
+  const ezCount=items.filter(it=>!['obj','rwall','truss','paint','spot','banner'].includes(it.type)).length;
   const trussCt=items.filter(it=>it.type==='truss').length;
   const connTotal=Object.values(b.connCount).reduce((x,y)=>x+y,0);
   return `<h2>Project summary</h2>
@@ -1523,6 +1597,8 @@ function projectSummaryHTML(){
       <tr><td><b>EZTube connectors</b></td><td>${connTotal}</td></tr>
       ${trussCt?`<tr><td><b>Stage truss assemblies</b></td><td>${trussCt}</td></tr>`:''}
       ${b.paintArea||b.paintLine?`<tr><td><b>Wall paint / finishes</b></td><td>${sqft(b.paintArea).toFixed(0)} ft² area · ${(b.paintLine/FT).toFixed(0)} ft line</td></tr>`:''}
+      ${b.spotCount?`<tr><td><b>Spotlights</b></td><td>${b.spotCount}</td></tr>`:''}
+      ${b.bannerCount?`<tr><td><b>Banners</b></td><td>${b.bannerCount} · ${sqft(b.bannerArea).toFixed(0)} ft² print</td></tr>`:''}
       <tr><td><b>Tube</b></td><td>${(b.totalTube/FT).toFixed(1)} linear ft · ${Math.max(b.stockNeeded,b.stockWithWaste)} stock ${settings.stockIn}″ tubes incl. ${settings.wastePct}% waste</td></tr>
       <tr><td><b>Open floor</b></td><td>≈ ${sqft(a.free).toFixed(0)} ft²</td></tr>
       ${projectNotes?`<tr><td valign="top"><b>Notes</b></td><td>${projectNotes.replace(/</g,'&lt;').replace(/\n/g,'<br>')}</td></tr>`:''}
@@ -1554,6 +1630,15 @@ function openPrintWindow(includeBom){
       Object.keys(b.paintByColor).sort().forEach(c=>{ const e=b.paintByColor[c];
         bomHtml+=`<tr><td>${c}</td><td>${e.area?sqft(e.area).toFixed(1):'—'}</td><td>${e.line?(e.line/FT).toFixed(1):'—'}</td></tr>`; });
       bomHtml+='</table>';
+    }
+    if(b.spotCount){
+      bomHtml+='<h3>Lighting &amp; AV</h3><table><tr><th>Spotlight color</th><th>Qty</th></tr>';
+      Object.keys(b.spotByColor).sort().forEach(c=>{ bomHtml+=`<tr><td>${c}</td><td>${b.spotByColor[c]}</td></tr>`; });
+      bomHtml+='</table>';
+    }
+    if(b.bannerCount){
+      bomHtml+=`<h3>Signage / banners</h3><table><tr><th>Item</th><th>Qty</th><th>Print area (ft²)</th></tr>
+        <tr><td>Image banners</td><td>${b.bannerCount}</td><td>${sqft(b.bannerArea).toFixed(1)}</td></tr></table>`;
     }
     if(Object.keys(b.rwallCount).length||Object.keys(b.objCount).length){
       bomHtml+='<h3>Layout objects (non-EZTube)</h3><table><tr><th>Item</th><th>Qty</th></tr>';

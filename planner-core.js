@@ -36,9 +36,10 @@ function sqft(m2){ return m2/(FT*FT); }
 /* ---------- 2. settings, layers, project state ---------- */
 const DEFAULT_SETTINGS = {snapIn:3, snapOn:true, gridOn:true, dimsOn:true,
                           minAisleIn:36, vrBufferIn:24, stockIn:96, wastePct:10};
-const DEFAULT_LAYERS = {ez:true, truss:true, paint:true, building:true, doors:true, zones:true,
+const DEFAULT_LAYERS = {ez:true, truss:true, paint:true, lighting:true, signage:true, building:true, doors:true, zones:true,
                         furniture:true, elec:true, labels:true, floorimg:true};
-const LAYER_NAMES = {ez:'EZTube structures', truss:'Truss / rigging', paint:'Wall paint / finishes', building:'Building walls / columns', doors:'Doors & windows',
+const LAYER_NAMES = {ez:'EZTube structures', truss:'Truss / rigging', paint:'Wall paint / finishes',
+                     lighting:'Lighting', signage:'Signage / banners', building:'Building walls / columns', doors:'Doors & windows',
                      zones:'VR & operational zones', furniture:'Furniture / equipment',
                      elec:'Electrical / data / markers', labels:'Labels', floorimg:'Floor-plan image'};
 
@@ -62,12 +63,22 @@ vp.appendChild(renderer.domElement);
 const controls = new THREE.OrbitControls(camera, renderer.domElement);
 controls.target.set(0, 1, 0);
 controls.maxPolarAngle = Math.PI/2 - 0.02;
-scene.add(new THREE.AmbientLight(0xffffff, .55));
+const ambient = new THREE.AmbientLight(0xffffff, .55);
+scene.add(ambient);
 const sun = new THREE.DirectionalLight(0xffffff, .85);
 sun.position.set(10, 18, 8); sun.castShadow = true;
 sun.shadow.mapSize.set(2048, 2048);
 sun.shadow.camera.left=-20; sun.shadow.camera.right=20; sun.shadow.camera.top=20; sun.shadow.camera.bottom=-20;
 scene.add(sun);
+// "show lighting" / blackout mode — dims the house lights so RGB spots read
+const HOUSE_LIGHT = {amb:.55, sun:.85, bg:0x14161a};
+let showLighting = false;
+function setShowLighting(on){
+  showLighting = on;
+  ambient.intensity = on ? .12 : HOUSE_LIGHT.amb;
+  sun.intensity     = on ? .18 : HOUSE_LIGHT.sun;
+  scene.background.setHex(on ? 0x06070a : HOUSE_LIGHT.bg);
+}
 function resize(){ const w=vp.clientWidth,h=vp.clientHeight; camera.aspect=w/h; camera.updateProjectionMatrix(); renderer.setSize(w,h); renderer.setPixelRatio(Math.min(devicePixelRatio,2)); }
 addEventListener('resize', resize); resize();
 
@@ -625,6 +636,88 @@ function buildPaint(p){
   return {group:g, conns:[], cuts:[], paint:{mode:p.mode||'area', area, lineLen}};
 }
 
+/* ---------- 7d. RGB spotlight fixture ----------
+   A fixture body + a real THREE.SpotLight + an optional translucent beam cone.
+   p: {color hex, intensity, beam(° half-angle), reach(ft), elev(ft mount height),
+       tilt(° from straight-down), beamOn, shadow}.  Pan = item rotation. */
+function buildSpot(p){
+  const g=new THREE.Group();
+  const color=new THREE.Color(p.color||'#ff2d6b');
+  const mountY=(p.elev!=null?p.elev:11)*FT;
+  const reach=Math.max(1,(p.reach||16))*FT;
+  const beam=Math.max(3, Math.min(80, p.beam||22))*Math.PI/180;   // half-angle (rad)
+  const tilt=Math.max(0, Math.min(89, p.tilt||0))*Math.PI/180;
+  const intensity=(p.intensity!=null?+p.intensity:4);
+  const dir=new THREE.Vector3(0, -Math.cos(tilt), Math.sin(tilt)).normalize();  // aim
+  const pos=new THREE.Vector3(0, mountY, 0);
+
+  // fixture can (oriented along aim)
+  const can=new THREE.Mesh(new THREE.CylinderGeometry(0.055,0.075,0.17,16),
+    new THREE.MeshStandardMaterial({color:0x16181d, roughness:.5, metalness:.6}));
+  can.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0), dir);
+  can.position.copy(pos).addScaledVector(dir,0.085); can.castShadow=true; g.add(can);
+  // glowing lens at the front
+  const lens=new THREE.Mesh(new THREE.CircleGeometry(0.05,20),
+    new THREE.MeshBasicMaterial({color:color}));
+  lens.position.copy(pos).addScaledVector(dir,0.175);
+  lens.quaternion.setFromUnitVectors(new THREE.Vector3(0,0,1), dir); g.add(lens);
+
+  // real spotlight + target
+  const light=new THREE.SpotLight(color, intensity, reach, beam, 0.4, 1);
+  light.position.copy(pos);
+  const tgt=new THREE.Object3D(); tgt.position.copy(pos).addScaledVector(dir,reach); g.add(tgt);
+  light.target=tgt;
+  if(p.shadow===true||p.shadow==='true'){ light.castShadow=true; light.shadow.mapSize.set(1024,1024); }
+  g.add(light);
+
+  // visible haze beam cone (apex at fixture, base at throw end)
+  if(p.beamOn!==false && p.beamOn!=='false'){
+    const baseR=Math.tan(beam)*reach;
+    const cone=new THREE.Mesh(new THREE.ConeGeometry(baseR, reach, 28, 1, true),
+      new THREE.MeshBasicMaterial({color:color, transparent:true, opacity:0.09,
+        side:THREE.DoubleSide, blending:THREE.AdditiveBlending, depthWrite:false}));
+    cone.position.copy(pos).addScaledVector(dir, reach/2);
+    cone.quaternion.setFromUnitVectors(new THREE.Vector3(0,-1,0), dir);
+    cone.renderOrder=5; g.add(cone);
+  }
+  return {group:g, conns:[], cuts:[]};
+}
+
+/* ---------- 7e. image banner ----------
+   Textured vertical plane sized to the image aspect. p: {img dataURL, w(ft),
+   aspect(h/w), elev(ft), mount standing|hanging, double, opacity}. */
+function buildBanner(p){
+  const g=new THREE.Group();
+  const W=Math.max(0.5,(p.w||6))*FT, aspect=p.aspect||0.5, H=W*aspect;
+  const elev=(p.elev||0)*FT, hanging=(p.mount==='hanging');
+  const opacity=(p.opacity!=null)?Math.max(0.1,Math.min(1,+p.opacity)):1;
+  const ceil=room.h*FT;
+  const topY = hanging ? Math.min(ceil-0.05, elev+H) : elev+H;
+  const botY = topY - H;
+  const mat=new THREE.MeshBasicMaterial({color:0xffffff,
+    side:(p.double===false||p.double==='false')?THREE.FrontSide:THREE.DoubleSide,
+    transparent:opacity<1, opacity});
+  if(p.img){ const tex=new THREE.TextureLoader().load(p.img, t=>{ t.colorSpace=THREE.SRGBColorSpace; mat.needsUpdate=true; }); mat.map=tex; }
+  const plane=new THREE.Mesh(new THREE.PlaneGeometry(W,H), mat);
+  plane.position.set(0,(topY+botY)/2,0); g.add(plane);
+  if(hanging){
+    [-W/2, W/2].forEach(x=>{
+      const geo=new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(x,topY,0), new THREE.Vector3(x,ceil,0)]);
+      g.add(new THREE.Line(geo, new THREE.LineBasicMaterial({color:0x888d98})));
+    });
+  } else if(botY>0.05){
+    [-W/2+0.06, W/2-0.06].forEach(x=>{
+      const leg=new THREE.Mesh(new THREE.CylinderGeometry(0.02,0.02,botY,8),
+        new THREE.MeshStandardMaterial({color:0x3a3d44, roughness:.6, metalness:.4}));
+      leg.position.set(x, botY/2, 0); leg.castShadow=true; g.add(leg);
+    });
+  }
+  const edges=new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.PlaneGeometry(W,H)),
+    new THREE.LineBasicMaterial({color:0x555a66}));
+  edges.position.copy(plane.position); g.add(edges);
+  return {group:g, conns:[], cuts:[]};
+}
+
 /* ---------- 8. building wall + space-plan object builders ---------- */
 const RWALL_COLORS = {WH:0xe8e4da, GY:0x8d9097, CN:0xb6b3ac, BK:0x3a3d44};
 function buildRwall(p){
@@ -721,7 +814,8 @@ function buildObj(p){
 
 const BUILDERS = {wall:buildWall, booth:buildBooth, tube:buildTube, part:buildPart,
                   rwall:buildRwall, lrun:buildLRun, urun:buildURun, frame:buildFrame,
-                  sign:buildSign, truss:buildTruss, paint:buildPaint, obj:buildObj};
+                  sign:buildSign, truss:buildTruss, paint:buildPaint,
+                  spot:buildSpot, banner:buildBanner, obj:buildObj};
 
 /* ---------- 9. item lifecycle ---------- */
 let items = [];   // {id,type,x,z,rot,params, label?,notes?,locked?,hidden?,grp?}
@@ -734,6 +828,8 @@ function layerOf(it){
   if(it.type==='rwall') return 'building';
   if(it.type==='truss') return 'truss';
   if(it.type==='paint') return 'paint';
+  if(it.type==='spot') return 'lighting';
+  if(it.type==='banner') return 'signage';
   if(it.type==='obj'){ const k=OBJ_KINDS[it.params.kind]; return k?k.layer:'zones'; }
   return 'ez';
 }
